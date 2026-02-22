@@ -9,6 +9,8 @@ defmodule ClearsightNews.Analysis.RhetoricResult do
   use Instructor
   import Ecto.Changeset
 
+  alias ClearsightNews.Analysis.RhetoricalDevice
+
   @llm_doc """
   Analyse the rhetorical style of a news article.
 
@@ -28,7 +30,7 @@ defmodule ClearsightNews.Analysis.RhetoricResult do
   embedded_schema do
     field :overall_tone, :string
     field :sentiment_label, :string
-    field :rhetorical_devices, {:array, :map}, default: []
+    embeds_many :rhetorical_devices, RhetoricalDevice
     field :bias_indicators, {:array, :string}, default: []
   end
 

@@ -3,19 +3,42 @@ defmodule ClearsightNews.ArticleAnalyzer do
   Shared pipeline for upserting raw NewsAPI articles and running sentiment
   analysis on each one. Used by both `ResultsLive` (search) and
   `SearchLive` (latest headlines).
+
+  The preferred flow for LiveViews is:
+    1. `upsert_articles/1`  — fast DB upsert, returns article structs immediately
+       with `:analysis_status` set to `"pending"` or `"complete"` (if cached).
+    2. Render all cards right away (cached ones show real scores, new ones show
+       the "Analyzing…" badge).
+    3. For each article whose `:analysis_status` is `"pending"`, fire a
+       supervised `Task` that calls `run_sentiment/1` and sends the result back
+       to the LiveView via `send(lv_pid, {:analysis_result, article})`.
   """
 
   alias ClearsightNews.{Article, Analysis, ModelResponse, Repo}
   import Ecto.Query
 
   @doc """
-  Upserts a list of raw article maps into the DB (deduped by URL) and runs
-  sentiment analysis concurrently on each one.
-
-  Returns `{:ok, articles_with_scores}` where each article struct has a
-  `:computed_score` float (or `nil` on error/timeout).
+  Allows a spawned task process to use the Ecto sandbox connection of the
+  calling process. No-op in production (Sandbox is not started).
   """
-  def upsert_and_analyse(raw_articles) do
+  def allow_sandbox(pid) do
+    if sandbox = Process.get({Ecto.Adapters.SQL.Sandbox, Repo}) do
+      Ecto.Adapters.SQL.Sandbox.allow(Repo, sandbox, pid)
+    end
+  end
+
+  @doc """
+  Upserts raw NewsAPI article maps into the DB (deduped by URL).
+
+  Returns `{:ok, articles}` where every article struct has:
+    - `:analysis_status` — `"complete"` if a cached sentiment result exists,
+      `"pending"` otherwise.
+    - `:computed_score`, `:computed_result`, `:model_name` — populated from
+      cache when available, `nil` otherwise.
+  """
+  def upsert_articles([]), do: {:ok, []}
+
+  def upsert_articles(raw_articles) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     rows =
@@ -32,8 +55,6 @@ defmodule ClearsightNews.ArticleAnalyzer do
 
     article_ids = Enum.map(articles, & &1.id)
 
-    # Reuse any existing complete sentiment results so we don't hammer
-    # the Groq API on every page load for already-analysed articles.
     cached_by_id =
       Repo.all(
         from mr in ModelResponse,
@@ -46,44 +67,31 @@ defmodule ClearsightNews.ArticleAnalyzer do
       |> Enum.uniq_by(& &1.article_id)
       |> Map.new(&{&1.article_id, &1})
 
-    analysed =
-      articles
-      |> Task.async_stream(
-        fn article ->
-          case Map.get(cached_by_id, article.id) do
-            %ModelResponse{} = mr ->
-              article
-              |> Map.put(:computed_score, mr.computed_score)
-              |> Map.put(:computed_result, mr.computed_result)
-              |> Map.put(:analysis_status, "complete")
-              |> Map.put(:model_name, mr.model_name)
+    articles =
+      Enum.map(articles, fn article ->
+        case Map.get(cached_by_id, article.id) do
+          %ModelResponse{} = mr ->
+            article
+            |> Map.put(:computed_score, mr.computed_score)
+            |> Map.put(:computed_result, mr.computed_result)
+            |> Map.put(:analysis_status, "complete")
+            |> Map.put(:model_name, mr.model_name)
 
-            nil ->
-              run_sentiment(article)
-          end
-        end,
-        max_concurrency: 5,
-        timeout: 30_000,
-        on_timeout: :kill_task
-      )
-      |> Enum.zip(articles)
-      |> Enum.map(fn
-        {{:ok, article_with_score}, _} -> article_with_score
-
-        {{:exit, _}, article} ->
-          article
-          |> Map.put(:computed_score, nil)
-          |> Map.put(:computed_result, nil)
-          |> Map.put(:analysis_status, "error")
-          |> Map.put(:model_name, nil)
+          nil ->
+            article
+            |> Map.put(:computed_score, nil)
+            |> Map.put(:computed_result, nil)
+            |> Map.put(:analysis_status, "pending")
+            |> Map.put(:model_name, nil)
+        end
       end)
 
-    {:ok, analysed}
+    {:ok, articles}
   end
 
   @doc "Run sentiment analysis for a single article and persist the ModelResponse row."
   def run_sentiment(article) do
-    model_name = System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.1-8b-instant")
+    model_name = System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.3-70b-versatile")
     text = article.content || article.description || ""
 
     {:ok, response} =
@@ -128,14 +136,14 @@ defmodule ClearsightNews.ArticleAnalyzer do
     |> Map.put(:model_name, model_name)
   end
 
-  defp deep_struct_to_map(%_struct{} = struct) do
+  def deep_struct_to_map(%_struct{} = struct) do
     struct
     |> Map.from_struct()
     |> Enum.map(fn {k, v} -> {k, deep_struct_to_map(v)} end)
     |> Enum.into(%{})
   end
 
-  defp deep_struct_to_map([head | tail]), do: [deep_struct_to_map(head) | deep_struct_to_map(tail)]
-  defp deep_struct_to_map(nil), do: nil
-  defp deep_struct_to_map(value), do: value
+  def deep_struct_to_map([head | tail]), do: [deep_struct_to_map(head) | deep_struct_to_map(tail)]
+  def deep_struct_to_map(nil), do: nil
+  def deep_struct_to_map(value), do: value
 end

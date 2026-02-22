@@ -34,9 +34,10 @@ defmodule ClearsightNewsWeb.ConnCase do
   setup tags do
     ClearsightNews.DataCase.setup_sandbox(tags)
 
-    # SearchLive fires an async top_headlines call on mount; stub it globally so
-    # any test that incidentally loads the home page doesn't crash on Mox.
+    # Stub both NewsApi calls so LiveView mount tasks never touch the DB or
+    # network during tests, eliminating sandbox connection noise.
     Mox.stub(ClearsightNews.MockNewsApi, :top_headlines, fn _opts -> {:ok, []} end)
+    Mox.stub(ClearsightNews.MockNewsApi, :search, fn _q, _opts -> {:ok, []} end)
 
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end

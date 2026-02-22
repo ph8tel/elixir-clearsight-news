@@ -3,17 +3,26 @@ defmodule ClearsightNewsWeb.SearchLive do
 
   alias ClearsightNews.{Analysis, ArticleAnalyzer, NewsApiService}
 
+  # Delay between sequential Groq calls (ms) to stay well under rate limits.
+  @analysis_interval 300
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
       |> assign(query: "", page_title: "ClearSight News")
-      |> assign_async(:latest, fn -> fetch_latest() end,
-        supervisor: ClearsightNews.TaskSupervisor
-      )
+      |> assign(headlines: :loading)
+
+    if connected?(socket) do
+      send(self(), :fetch_headlines)
+    end
 
     {:ok, socket}
   end
+
+  # ---------------------------------------------------------------------------
+  # Events
+  # ---------------------------------------------------------------------------
 
   @impl true
   def handle_event("search", %{"search" => %{"query" => query}}, socket) do
@@ -25,6 +34,81 @@ defmodule ClearsightNewsWeb.SearchLive do
       {:noreply, push_navigate(socket, to: ~p"/results?q=#{q}")}
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Messages
+  # ---------------------------------------------------------------------------
+
+  @impl true
+  def handle_info(:fetch_headlines, socket) do
+    lv = self()
+
+    {:ok, task_pid} =
+      Task.Supervisor.start_child(ClearsightNews.TaskSupervisor, fn ->
+        impl = NewsApiService.impl()
+
+        case impl.top_headlines(max: 9) do
+          {:ok, raw_articles} ->
+            case ArticleAnalyzer.upsert_articles(raw_articles) do
+              {:ok, articles} -> send(lv, {:headlines_ready, articles})
+              _ -> send(lv, :headlines_failed)
+            end
+
+          _ ->
+            send(lv, :headlines_failed)
+        end
+      end)
+
+    ArticleAnalyzer.allow_sandbox(task_pid)
+    {:noreply, socket}
+  end
+
+  def handle_info({:headlines_ready, articles}, socket) do
+    # Build id→article map for O(1) patch updates
+    articles_map = Map.new(articles, &{&1.id, &1})
+
+    socket = assign(socket, headlines: articles_map)
+
+    # Kick off sequential analysis only for pending articles
+    pending = Enum.filter(articles, &(&1.analysis_status == "pending"))
+    schedule_next_analysis(pending)
+
+    {:noreply, socket}
+  end
+
+  def handle_info(:headlines_failed, socket) do
+    {:noreply, assign(socket, headlines: :error)}
+  end
+
+  def handle_info({:analyse_article, article}, socket) do
+    lv = self()
+
+    {:ok, task_pid} =
+      Task.Supervisor.start_child(ClearsightNews.TaskSupervisor, fn ->
+        result = ArticleAnalyzer.run_sentiment(article)
+        send(lv, {:analysis_result, result})
+      end)
+
+    ArticleAnalyzer.allow_sandbox(task_pid)
+    {:noreply, socket}
+  end
+
+  def handle_info({:analysis_result, article}, socket) do
+    socket =
+      case socket.assigns.headlines do
+        map when is_map(map) ->
+          assign(socket, headlines: Map.put(map, article.id, article))
+
+        other ->
+          assign(socket, headlines: other)
+      end
+
+    {:noreply, socket}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Render
+  # ---------------------------------------------------------------------------
 
   @impl true
   def render(assigns) do
@@ -57,19 +141,21 @@ defmodule ClearsightNewsWeb.SearchLive do
         <div>
           <h2 class="text-xl font-semibold mb-6">Latest Headlines</h2>
 
-          <.async_result :let={articles} assign={@latest}>
-            <:loading>
+          <%= cond do %>
+            <% @headlines == :loading -> %>
               <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div :for={_ <- 1..9} class="card bg-base-200 h-44 animate-pulse" />
               </div>
-            </:loading>
-            <:failed :let={_reason}>
+            <% @headlines == :error -> %>
               <p class="text-error">Could not load latest articles.</p>
-            </:failed>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <.headline_card :for={article <- articles} article={article} />
-            </div>
-          </.async_result>
+            <% true -> %>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <.headline_card
+                  :for={{_id, article} <- @headlines}
+                  article={article}
+                />
+              </div>
+          <% end %>
         </div>
       </div>
     </div>
@@ -96,25 +182,36 @@ defmodule ClearsightNewsWeb.SearchLive do
       <div class="card-body p-4 flex flex-col gap-2">
         <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-1 text-xs text-base-content/50 min-w-0">
-            <span class="truncate"><%= @article.source %></span>
-            <span :if={@formatted_date} class="shrink-0 text-base-content/40">· {@formatted_date}</span>
+            <span class="truncate">{@article.source}</span>
+            <span :if={@formatted_date} class="shrink-0 text-base-content/40">
+              · {@formatted_date}
+            </span>
           </div>
-          <span class={["badge badge-sm shrink-0", sentiment_badge_class(@article.computed_score)]}>
-            <%= sentiment_label(@article.computed_score) %>
-          </span>
+          <%= if is_nil(Map.get(@article, :computed_score)) do %>
+            <span class={[
+              "badge badge-sm shrink-0",
+              sentiment_badge_class(Map.get(@article, :analysis_status))
+            ]}>
+              {sentiment_label(Map.get(@article, :analysis_status))}
+            </span>
+          <% else %>
+            <span class={["badge badge-sm shrink-0", sentiment_badge_class(@article.computed_score)]}>
+              {sentiment_label(@article.computed_score)}
+            </span>
+          <% end %>
         </div>
         <h3 class="font-semibold text-sm leading-snug">
           <a href={@article.url} target="_blank" rel="noopener" class="hover:underline">
-            <%= @article.title %>
+            {@article.title}
           </a>
         </h3>
         <p :if={@article.description} class="text-xs text-base-content/70 line-clamp-3 flex-1">
-          <%= @article.description %>
+          {@article.description}
         </p>
         <div class="flex flex-wrap items-center gap-1 text-xs text-base-content/40 mt-auto">
-          <span class="font-mono">Score: <%= format_score(Map.get(@article, :computed_score)) %></span>
+          <span class="font-mono">Score: {format_score(Map.get(@article, :computed_score))}</span>
           <span :if={@emotion} class="badge badge-xs badge-ghost">
-            <%= elem(@emotion, 1) %> <%= elem(@emotion, 0) %>
+            {elem(@emotion, 1)} {elem(@emotion, 0)}
           </span>
           <span :if={@loaded_lang_high} class="badge badge-xs badge-warning">🔥 loaded</span>
         </div>
@@ -135,6 +232,7 @@ defmodule ClearsightNewsWeb.SearchLive do
   # Helpers
   # ---------------------------------------------------------------------------
 
+  defp sentiment_badge_class("pending"), do: "badge-neutral animate-pulse"
   defp sentiment_badge_class(nil), do: "badge-neutral"
 
   defp sentiment_badge_class(score) do
@@ -145,6 +243,7 @@ defmodule ClearsightNewsWeb.SearchLive do
     end
   end
 
+  defp sentiment_label("pending"), do: "Analyzing…"
   defp sentiment_label(nil), do: "Unscored"
   defp sentiment_label(score), do: Analysis.label(score)
 
@@ -199,15 +298,19 @@ defmodule ClearsightNewsWeb.SearchLive do
   end
 
   # ---------------------------------------------------------------------------
-  # Async work
+  # Private helpers
   # ---------------------------------------------------------------------------
 
-  defp fetch_latest do
-    impl = NewsApiService.impl()
+  defp schedule_next_analysis([]), do: :ok
 
-    with {:ok, raw_articles} <- impl.top_headlines(max: 9),
-         {:ok, analysed} <- ArticleAnalyzer.upsert_and_analyse(raw_articles) do
-      {:ok, %{latest: analysed}}
-    end
+  defp schedule_next_analysis([article | rest]) do
+    Process.send_after(self(), {:analyse_article, article}, @analysis_interval)
+    # Chain remaining articles so they fire one after the previous sends its message.
+    # Each {:analyse_article} handler spawns the task and returns immediately, so
+    # the next schedule fires @analysis_interval ms later regardless of Groq latency.
+    Enum.reduce(rest, @analysis_interval, fn article, delay ->
+      Process.send_after(self(), {:analyse_article, article}, delay + @analysis_interval)
+      delay + @analysis_interval
+    end)
   end
 end

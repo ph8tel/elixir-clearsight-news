@@ -2,6 +2,7 @@ defmodule ClearsightNews.AnalysisTest do
   use ExUnit.Case, async: true
 
   alias ClearsightNews.Analysis
+
   alias ClearsightNews.Analysis.{
     SentimentResult,
     RhetoricResult,
@@ -94,7 +95,8 @@ defmodule ClearsightNews.AnalysisTest do
     end
 
     test "returns {:ok, %SentimentResult{}} with correct tone" do
-      assert {:ok, %SentimentResult{tone: "positive"}} = Analysis.analyse_sentiment("Some news text")
+      assert {:ok, %SentimentResult{tone: "positive"}} =
+               Analysis.analyse_sentiment("Some news text")
     end
 
     test "populates embedded emotion scores" do
@@ -156,8 +158,13 @@ defmodule ClearsightNews.AnalysisTest do
 
     test "populates rhetorical_devices list" do
       {:ok, result} = Analysis.analyse_rhetoric("text")
-      assert [%{"device" => "appeal to authority", "example" => "experts say..."}] =
-               result.rhetorical_devices
+
+      assert [
+               %ClearsightNews.Analysis.RhetoricalDevice{
+                 device: "appeal to authority",
+                 example: "experts say..."
+               }
+             ] = result.rhetorical_devices
     end
 
     test "populates bias_indicators list" do
@@ -303,7 +310,9 @@ defmodule ClearsightNews.AnalysisTest do
       }
 
       speculative = %{base | certainty: %Certainty{certainty: 0.0, speculation: 1.0}}
-      assert Analysis.compute_sentiment_score(speculative) < Analysis.compute_sentiment_score(base)
+
+      assert Analysis.compute_sentiment_score(speculative) <
+               Analysis.compute_sentiment_score(base)
     end
 
     test "result is always a float rounded to 4 decimal places" do
