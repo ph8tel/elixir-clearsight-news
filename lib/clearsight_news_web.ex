@@ -86,6 +86,7 @@ defmodule ClearsightNewsWeb do
       import Phoenix.HTML
       # Core UI components
       import ClearsightNewsWeb.CoreComponents
+      import ClearsightNewsWeb.ArticleHelpers
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

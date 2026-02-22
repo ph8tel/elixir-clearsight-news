@@ -1,7 +1,7 @@
 defmodule ClearsightNewsWeb.CompareLive do
   use ClearsightNewsWeb, :live_view
 
-  alias ClearsightNews.{Article, Analysis, ModelResponse, Repo}
+  alias ClearsightNews.{Article, Analysis, ArticleAnalyzer, ModelResponse, Repo}
 
   @impl true
   def mount(%{"primary" => p_id, "reference" => r_id}, _session, socket) do
@@ -18,7 +18,9 @@ defmodule ClearsightNewsWeb.CompareLive do
         socket
         |> assign(primary: primary, reference: reference)
         |> assign(page_title: "Compare · ClearSight")
-          |> assign_async(:primary_rhetoric, fn ->
+        |> assign_async(
+          :primary_rhetoric,
+          fn ->
             case run_rhetoric(primary) do
               {:ok, value} -> {:ok, %{primary_rhetoric: value}}
               {:error, reason} -> {:error, reason}
@@ -26,7 +28,9 @@ defmodule ClearsightNewsWeb.CompareLive do
           end,
           supervisor: ClearsightNews.TaskSupervisor
         )
-          |> assign_async(:reference_rhetoric, fn ->
+        |> assign_async(
+          :reference_rhetoric,
+          fn ->
             case run_rhetoric(reference) do
               {:ok, value} -> {:ok, %{reference_rhetoric: value}}
               {:error, reason} -> {:error, reason}
@@ -34,7 +38,9 @@ defmodule ClearsightNewsWeb.CompareLive do
           end,
           supervisor: ClearsightNews.TaskSupervisor
         )
-          |> assign_async(:comparison, fn ->
+        |> assign_async(
+          :comparison,
+          fn ->
             case run_comparison(primary, reference) do
               {:ok, value} -> {:ok, %{comparison: value}}
               {:error, reason} -> {:error, reason}
@@ -97,21 +103,22 @@ defmodule ClearsightNewsWeb.CompareLive do
 
   attr :label, :string, required: true
   attr :article, Article, required: true
-  attr :result, :any, required: true  # AsyncResult
+  # AsyncResult
+  attr :result, :any, required: true
 
   defp rhetoric_panel(assigns) do
     ~H"""
     <div class="card bg-base-100 shadow">
       <div class="card-body">
         <div class="text-xs font-semibold text-base-content/50 uppercase tracking-wide mb-1">
-          <%= @label %>
+          {@label}
         </div>
         <h2 class="text-base font-bold leading-snug mb-1">
           <a href={@article.url} target="_blank" rel="noopener" class="hover:underline">
-            <%= @article.title %>
+            {@article.title}
           </a>
         </h2>
-        <p class="text-xs text-base-content/50 mb-4"><%= @article.source %></p>
+        <p class="text-xs text-base-content/50 mb-4">{@article.source}</p>
 
         <.async_result :let={rh} assign={@result}>
           <:loading>
@@ -132,16 +139,16 @@ defmodule ClearsightNewsWeb.CompareLive do
   attr :result, :any, required: true
 
   defp rhetoric_body(%{result: nil} = assigns) do
-    ~H"<p class='text-sm text-base-content/50'>No result</p>"
+    ~H(<p class="text-sm text-base-content/50">No result</p>)
   end
 
   defp rhetoric_body(assigns) do
     ~H"""
     <div class="space-y-3 text-sm">
       <div>
-        <span class="font-semibold">Tone: </span><%= @result.overall_tone %>
+        <span class="font-semibold">Tone: </span>{@result.overall_tone}
         <span class={"ml-2 badge badge-sm #{sentiment_badge(@result.sentiment_label)}"}>
-          <%= String.capitalize(@result.sentiment_label || "") %>
+          {String.capitalize(@result.sentiment_label || "")}
         </span>
       </div>
 
@@ -149,8 +156,8 @@ defmodule ClearsightNewsWeb.CompareLive do
         <p class="font-semibold mb-1">Rhetorical Devices</p>
         <ul class="list-disc list-inside space-y-1 text-xs text-base-content/80">
           <li :for={d <- @result.rhetorical_devices}>
-            <span class="font-medium"><%= d["device"] %></span>
-            <span :if={d["example"]} class="italic"> — "<%= d["example"] %>"</span>
+            <span class="font-medium">{d["device"]}</span>
+            <span :if={d["example"]} class="italic"> — "{d["example"]}"</span>
           </li>
         </ul>
       </div>
@@ -158,7 +165,7 @@ defmodule ClearsightNewsWeb.CompareLive do
       <div :if={@result.bias_indicators != []}>
         <p class="font-semibold mb-1">Bias Indicators</p>
         <ul class="list-disc list-inside space-y-1 text-xs text-base-content/80">
-          <li :for={b <- @result.bias_indicators}><%= b %></li>
+          <li :for={b <- @result.bias_indicators}>{b}</li>
         </ul>
       </div>
     </div>
@@ -168,7 +175,7 @@ defmodule ClearsightNewsWeb.CompareLive do
   attr :result, :any, required: true
 
   defp comparison_body(%{result: nil} = assigns) do
-    ~H"<p class='text-sm text-base-content/50'>No result</p>"
+    ~H(<p class="text-sm text-base-content/50">No result</p>)
   end
 
   defp comparison_body(assigns) do
@@ -189,8 +196,8 @@ defmodule ClearsightNewsWeb.CompareLive do
   defp comp_field(assigns) do
     ~H"""
     <div>
-      <dt class="font-semibold text-base-content mb-1"><%= @label %></dt>
-      <dd class="text-base-content/80 leading-relaxed"><%= @value || "—" %></dd>
+      <dt class="font-semibold text-base-content mb-1">{@label}</dt>
+      <dd class="text-base-content/80 leading-relaxed">{@value || "—"}</dd>
     </div>
     """
   end
@@ -204,7 +211,7 @@ defmodule ClearsightNewsWeb.CompareLive do
   # ---------------------------------------------------------------------------
 
   defp run_rhetoric(article) do
-    model_name = System.get_env("GROQ_RHETORIC_MODEL", "llama-3.1-8b-instant")
+    model_name = System.get_env("GROQ_RHETORIC_MODEL", "llama-3.3-70b-versatile")
     text = article.content || ""
 
     {:ok, response} =
@@ -231,7 +238,7 @@ defmodule ClearsightNewsWeb.CompareLive do
     |> ModelResponse.complete_changeset(%{
       status: status,
       latency_ms: latency_ms,
-      computed_result: result && Map.from_struct(result),
+      computed_result: result && ArticleAnalyzer.deep_struct_to_map(result),
       error_message: error_message
     })
     |> Repo.update!()
@@ -269,7 +276,7 @@ defmodule ClearsightNewsWeb.CompareLive do
     |> ModelResponse.complete_changeset(%{
       status: status,
       latency_ms: latency_ms,
-      computed_result: result && Map.from_struct(result),
+      computed_result: result && ArticleAnalyzer.deep_struct_to_map(result),
       error_message: error_message
     })
     |> Repo.update!()

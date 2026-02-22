@@ -6,19 +6,15 @@ defmodule ClearsightNews.Analysis do
   parsing, validation, and retries automatically. Each function returns
   `{:ok, result_struct}` or `{:error, reason}`.
 
-  Model constants are read from env vars at startup so they can be
-  overridden without code changes:
-  - GROQ_SENTIMENT_MODEL  (default: llama-3.1-8b-instant)
-  - GROQ_RHETORIC_MODEL   (default: llama-3.1-8b-instant)
+  Model names are read from env vars **at runtime** on every call so that
+  Fly secrets take effect without redeploying:
+  - GROQ_SENTIMENT_MODEL  (default: llama-3.3-70b-versatile)
+  - GROQ_RHETORIC_MODEL   (default: llama-3.3-70b-versatile)
   - GROQ_COMPARISON_MODEL (default: llama-3.3-70b-versatile)
   """
 
   alias ClearsightNews.Analysis.{SentimentResult, RhetoricResult, ComparisonResult}
   alias Instructor.Adapters.Groq
-
-  @sentiment_model System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.1-8b-instant")
-  @rhetoric_model System.get_env("GROQ_RHETORIC_MODEL", "llama-3.1-8b-instant")
-  @comparison_model System.get_env("GROQ_COMPARISON_MODEL", "llama-3.3-70b-versatile")
 
   # Articles are truncated to 4000 chars before being sent to the model,
   # matching the Python _truncate_text() behaviour.
@@ -39,21 +35,37 @@ defmodule ClearsightNews.Analysis do
   `classify/1` for convenience.
   """
   def analyse_sentiment(text) when is_binary(text) do
-    Instructor.chat_completion([
-      model: @sentiment_model,
-      response_model: SentimentResult,
-      max_retries: 3,
-      messages: [
-        %{
-          role: "user",
-          content: """
-          You are a news article analyst. Analyse the sentiment of the following article.
+    model = System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.3-70b-versatile")
 
-          Article:
-          #{truncate(text)}
-          """
-        }
-      ],
+    Instructor.chat_completion(
+      [
+        model: model,
+        response_model: SentimentResult,
+        max_retries: 3,
+        messages: [
+          %{
+            role: "system",
+            content: """
+            You are a structured news article analyst. You MUST respond ONLY with a JSON object
+            that has exactly these top-level keys: tone, emotions, rhetoric, loaded_language, certainty.
+            - tone: one of "positive", "neutral", "negative"
+            - emotions: object with keys joy, trust, fear, anger, sadness, anticipation, disgust, surprise (each 0.0–1.0)
+            - rhetoric: object with keys analytical, supportive, persuasive, alarmist, dismissive, sarcastic (each 0.0–1.0)
+            - loaded_language: float 0.0–1.0
+            - certainty: object with keys certainty and speculation (each 0.0–1.0)
+            Do NOT include any other keys. Do NOT include article_body, language, or any other fields.
+            """
+          },
+          %{
+            role: "user",
+            content: """
+            Analyse the sentiment of the following article.
+
+            Article:
+            #{truncate(text)}
+            """
+          }
+        ]
       ],
       instructor_config()
     )
@@ -65,21 +77,36 @@ defmodule ClearsightNews.Analysis do
   Returns `{:ok, %RhetoricResult{}}` or `{:error, reason}`.
   """
   def analyse_rhetoric(text) when is_binary(text) do
-    Instructor.chat_completion([
-      model: @rhetoric_model,
-      response_model: RhetoricResult,
-      max_retries: 3,
-      messages: [
-        %{
-          role: "user",
-          content: """
-          You are a news article analyst. Analyse the rhetorical style of the following article.
+    model = System.get_env("GROQ_RHETORIC_MODEL", "llama-3.3-70b-versatile")
 
-          Article:
-          #{truncate(text)}
-          """
-        }
-      ],
+    Instructor.chat_completion(
+      [
+        model: model,
+        response_model: RhetoricResult,
+        max_retries: 3,
+        messages: [
+          %{
+            role: "system",
+            content: """
+            You are a structured news article analyst. You MUST respond ONLY with a JSON object
+            that has exactly these top-level keys: overall_tone, sentiment_label, rhetorical_devices, bias_indicators.
+            - overall_tone: string (e.g. "neutral", "persuasive", "alarmist", "measured")
+            - sentiment_label: one of "positive", "neutral", "negative"
+            - rhetorical_devices: array of objects, each with keys "device" (string) and "example" (string)
+            - bias_indicators: array of strings
+            Do NOT include any other keys. Do NOT include article_body, language, or any other fields.
+            """
+          },
+          %{
+            role: "user",
+            content: """
+            Analyse the rhetorical style of the following article.
+
+            Article:
+            #{truncate(text)}
+            """
+          }
+        ]
       ],
       instructor_config()
     )
@@ -92,24 +119,40 @@ defmodule ClearsightNews.Analysis do
   """
   def analyse_comparison(primary_text, reference_text)
       when is_binary(primary_text) and is_binary(reference_text) do
-    Instructor.chat_completion([
-      model: @comparison_model,
-      response_model: ComparisonResult,
-      max_retries: 3,
-      messages: [
-        %{
-          role: "user",
-          content: """
-          You are a news article analyst. Compare these two articles on the same topic.
+    model = System.get_env("GROQ_COMPARISON_MODEL", "llama-3.3-70b-versatile")
 
-          Article 1:
-          #{truncate(primary_text)}
+    Instructor.chat_completion(
+      [
+        model: model,
+        response_model: ComparisonResult,
+        max_retries: 3,
+        messages: [
+          %{
+            role: "system",
+            content: """
+            You are a structured news article analyst. You MUST respond ONLY with a JSON object
+            that has exactly these top-level keys: framing_differences, tone_comparison, source_selection, key_differences, bias_assessment.
+            - framing_differences: string
+            - tone_comparison: string
+            - source_selection: string
+            - key_differences: string
+            - bias_assessment: string
+            Do NOT include any other keys.
+            """
+          },
+          %{
+            role: "user",
+            content: """
+            Compare these two articles on the same topic.
 
-          Article 2:
-          #{truncate(reference_text)}
-          """
-        }
-      ],
+            Article 1:
+            #{truncate(primary_text)}
+
+            Article 2:
+            #{truncate(reference_text)}
+            """
+          }
+        ]
       ],
       instructor_config()
     )
@@ -135,16 +178,18 @@ defmodule ClearsightNews.Analysis do
     tone = tone_polarity(result.tone)
 
     em = result.emotions || %ClearsightNews.Analysis.Emotions{}
+
     emotion_polarity =
-      ((em.joy + em.trust) - (em.anger + em.fear + em.sadness + em.disgust)) / 6.0
+      (em.joy + em.trust - (em.anger + em.fear + em.sadness + em.disgust)) / 6.0
 
     emotion_intensity =
       (em.joy + em.trust + em.fear + em.anger + em.sadness + em.disgust +
          em.anticipation + em.surprise) / 8.0
 
     rh = result.rhetoric || %ClearsightNews.Analysis.Rhetoric{}
+
     rhetoric_polarity =
-      ((rh.supportive + rh.analytical) - (rh.alarmist + rh.dismissive + rh.sarcastic)) / 5.0
+      (rh.supportive + rh.analytical - (rh.alarmist + rh.dismissive + rh.sarcastic)) / 5.0
 
     loaded_language = (result.loaded_language || 0.0) * -1.0
 
@@ -186,18 +231,32 @@ defmodule ClearsightNews.Analysis do
   defp tone_polarity(_), do: 0.0
 
   defp instructor_config do
-    api_key = Application.get_env(:clearsight_news, :groq_api_key) || System.get_env("GROQ_API_KEY")
+    api_key =
+      Application.get_env(:clearsight_news, :groq_api_key) || System.get_env("GROQ_API_KEY")
 
-    if is_binary(api_key) and api_key != "" do
-      [adapter: Groq, api_key: api_key]
-    else
-      [adapter: Groq]
+    base =
+      if is_binary(api_key) and api_key != "" do
+        [adapter: Groq, api_key: api_key]
+      else
+        [adapter: Groq]
+      end
+
+    # Allows tests to inject Req.Test plug without touching real HTTP.
+    # Set `config :clearsight_news, :instructor_http_options, [plug: {Req.Test, :groq_api}]`
+    # in test.exs to enable stubbing.
+    case Application.get_env(:clearsight_news, :instructor_http_options) do
+      nil -> base
+      http_opts -> Keyword.put(base, :http_options, http_opts)
     end
   end
 
   defp truncate(text) when byte_size(text) <= @max_chars, do: String.trim(text)
 
   defp truncate(text) do
-    text |> String.trim() |> binary_part(0, @max_chars) |> String.trim_trailing() |> Kernel.<>(" ...")
+    text
+    |> String.trim()
+    |> binary_part(0, @max_chars)
+    |> String.trim_trailing()
+    |> Kernel.<>(" ...")
   end
 end

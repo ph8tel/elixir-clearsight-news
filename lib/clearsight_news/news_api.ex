@@ -10,4 +10,11 @@ defmodule ClearsightNews.NewsApi do
   """
   @callback search(query :: String.t(), opts :: keyword()) ::
               {:ok, list(map())} | {:error, String.t()}
+
+  @doc """
+  Fetch the latest top-headline articles (no query required).
+  Returns `{:ok, [article_map]}` or `{:error, reason}`.
+  """
+  @callback top_headlines(opts :: keyword()) ::
+              {:ok, list(map())} | {:error, String.t()}
 end

@@ -13,6 +13,7 @@ defmodule ClearsightNews.NewsApiService do
   @behaviour ClearsightNews.NewsApi
 
   @base_url "https://newsapi.org/v2/everything"
+  @top_headlines_url "https://newsapi.org/v2/top-headlines"
   @default_max 15
 
   @doc """
@@ -57,6 +58,38 @@ defmodule ClearsightNews.NewsApiService do
         {:error, exception} ->
           {:error, "Request failed: #{Exception.message(exception)}"}
       end
+    end
+  end
+
+  @impl true
+  def top_headlines(opts \\ []) do
+    api_key = Application.get_env(:clearsight_news, :news_api_key)
+    max = Keyword.get(opts, :max, 9)
+
+    params = [
+      pageSize: min(max, 100),
+      language: "en",
+      apiKey: api_key
+    ]
+
+    case Req.get(@top_headlines_url, params: params) do
+      {:ok, %{status: 200, body: %{"status" => "ok", "articles" => raw_articles}}} ->
+        articles =
+          raw_articles
+          |> Enum.map(&process_article/1)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.take(max)
+
+        {:ok, articles}
+
+      {:ok, %{status: 200, body: %{"status" => status, "message" => message}}} ->
+        {:error, "NewsAPI error #{status}: #{message}"}
+
+      {:ok, %{status: status}} ->
+        {:error, "NewsAPI returned HTTP #{status}"}
+
+      {:error, exception} ->
+        {:error, "Request failed: #{Exception.message(exception)}"}
     end
   end
 
