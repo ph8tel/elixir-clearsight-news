@@ -135,7 +135,7 @@ defmodule ClearsightNewsWeb.SearchLive do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp sentiment_badge_class(nil), do: "badge-ghost"
+  defp sentiment_badge_class(nil), do: "badge-neutral"
 
   defp sentiment_badge_class(score) do
     case Analysis.classify(score) do
@@ -145,7 +145,7 @@ defmodule ClearsightNewsWeb.SearchLive do
     end
   end
 
-  defp sentiment_label(nil), do: "—"
+  defp sentiment_label(nil), do: "Unscored"
   defp sentiment_label(score), do: Analysis.label(score)
 
   defp format_score(nil), do: "—"

@@ -6,6 +6,7 @@ defmodule ClearsightNews.ArticleAnalyzer do
   """
 
   alias ClearsightNews.{Article, Analysis, ModelResponse, Repo}
+  import Ecto.Query
 
   @doc """
   Upserts a list of raw article maps into the DB (deduped by URL) and runs
@@ -29,9 +30,38 @@ defmodule ClearsightNews.ArticleAnalyzer do
         returning: true
       )
 
+    article_ids = Enum.map(articles, & &1.id)
+
+    # Reuse any existing complete sentiment results so we don't hammer
+    # the Groq API on every page load for already-analysed articles.
+    cached_by_id =
+      Repo.all(
+        from mr in ModelResponse,
+          where:
+            mr.article_id in ^article_ids and
+              mr.response_type == "sentiment" and
+              mr.status == "complete",
+          order_by: [desc: mr.inserted_at]
+      )
+      |> Enum.uniq_by(& &1.article_id)
+      |> Map.new(&{&1.article_id, &1})
+
     analysed =
       articles
-      |> Task.async_stream(&run_sentiment/1,
+      |> Task.async_stream(
+        fn article ->
+          case Map.get(cached_by_id, article.id) do
+            %ModelResponse{} = mr ->
+              article
+              |> Map.put(:computed_score, mr.computed_score)
+              |> Map.put(:computed_result, mr.computed_result)
+              |> Map.put(:analysis_status, "complete")
+              |> Map.put(:model_name, mr.model_name)
+
+            nil ->
+              run_sentiment(article)
+          end
+        end,
         max_concurrency: 5,
         timeout: 30_000,
         on_timeout: :kill_task
