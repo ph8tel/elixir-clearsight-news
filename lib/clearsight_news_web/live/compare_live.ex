@@ -156,8 +156,8 @@ defmodule ClearsightNewsWeb.CompareLive do
         <p class="font-semibold mb-1">Rhetorical Devices</p>
         <ul class="list-disc list-inside space-y-1 text-xs text-base-content/80">
           <li :for={d <- @result.rhetorical_devices}>
-            <span class="font-medium">{d["device"]}</span>
-            <span :if={d["example"]} class="italic"> — "{d["example"]}"</span>
+            <span class="font-medium">{d.device}</span>
+            <span :if={d.example} class="italic"> — "{d.example}"</span>
           </li>
         </ul>
       </div>
