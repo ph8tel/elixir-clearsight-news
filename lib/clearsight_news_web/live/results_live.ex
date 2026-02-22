@@ -1,7 +1,7 @@
 defmodule ClearsightNewsWeb.ResultsLive do
   use ClearsightNewsWeb, :live_view
 
-  alias ClearsightNews.{Article, Analysis, ModelResponse, Repo, NewsApiService}
+  alias ClearsightNews.{Analysis, ArticleAnalyzer, NewsApiService}
 
   @impl true
   def mount(%{"q" => query}, _session, socket) do
@@ -212,37 +212,8 @@ defmodule ClearsightNewsWeb.ResultsLive do
   defp fetch_and_analyse(query) do
     impl = NewsApiService.impl()
 
-    with {:ok, raw_articles} <- impl.search(query, max: 15) do
-      # Upsert articles — on_conflict :nothing keeps existing rows intact
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      rows =
-        Enum.map(raw_articles, fn a ->
-          Map.merge(a, %{inserted_at: now, updated_at: now})
-        end)
-
-      {_count, articles} =
-        Repo.insert_all(Article, rows,
-          on_conflict: {:replace, [:title, :content, :description, :updated_at]},
-          conflict_target: :url,
-          returning: true
-        )
-
-      # Run sentiment for each article, patch ModelResponse rows
-      analysed =
-        articles
-        |> Task.async_stream(&run_sentiment/1,
-          max_concurrency: 5,
-          timeout: 30_000,
-          on_timeout: :kill_task
-        )
-        |> Enum.zip(articles)
-        |> Enum.map(fn
-          {{:ok, article_with_score}, _} -> article_with_score
-          {{:exit, _}, article} -> Map.put(article, :computed_score, nil)
-        end)
-
-      # Partition into three columns
+    with {:ok, raw_articles} <- impl.search(query, max: 15),
+         {:ok, analysed} <- ArticleAnalyzer.upsert_and_analyse(raw_articles) do
       columns =
         Enum.group_by(analysed, fn a ->
           case a.computed_score do
@@ -259,58 +230,4 @@ defmodule ClearsightNewsWeb.ResultsLive do
        }}
     end
   end
-
-  defp run_sentiment(article) do
-    model_name = System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.1-8b-instant")
-    text = article.content || article.description || ""
-
-    # Insert a pending response row
-    {:ok, response} =
-      %ModelResponse{}
-      |> ModelResponse.changeset(%{
-        article_id: article.id,
-        response_type: "sentiment",
-        model_name: model_name,
-        status: "pending"
-      })
-      |> Repo.insert()
-
-    start = System.monotonic_time(:millisecond)
-
-    {status, computed_score, computed_result, error_message} =
-      case Analysis.analyse_sentiment(text) do
-        {:ok, result} ->
-          score = Analysis.compute_sentiment_score(result)
-          result_map = deep_struct_to_map(result)
-          {"complete", score, result_map, nil}
-
-        {:error, reason} ->
-          {"error", nil, nil, inspect(reason)}
-      end
-
-    latency_ms = System.monotonic_time(:millisecond) - start
-
-    # Patch the response row with results
-    response
-    |> ModelResponse.complete_changeset(%{
-      status: status,
-      latency_ms: latency_ms,
-      computed_score: computed_score,
-      computed_result: computed_result,
-      error_message: error_message
-    })
-    |> Repo.update!()
-
-    Map.put(article, :computed_score, computed_score)
-  end
-
-  defp deep_struct_to_map(%_struct{} = struct) do
-    struct
-    |> Map.from_struct()
-    |> Enum.map(fn {k, v} -> {k, deep_struct_to_map(v)} end)
-    |> Enum.into(%{})
-  end
-  defp deep_struct_to_map([head | tail]), do: [deep_struct_to_map(head) | deep_struct_to_map(tail)]
-  defp deep_struct_to_map(nil), do: nil
-  defp deep_struct_to_map(value), do: value
 end
