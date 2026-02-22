@@ -3,9 +3,6 @@ defmodule ClearsightNewsWeb.SearchLive do
 
   alias ClearsightNews.{Analysis, ArticleAnalyzer, NewsApiService}
 
-  # Delay between sequential Groq calls (ms) to stay well under rate limits.
-  @analysis_interval 300
-
   @impl true
   def mount(_params, _session, socket) do
     socket =
@@ -246,71 +243,4 @@ defmodule ClearsightNewsWeb.SearchLive do
   defp sentiment_label("pending"), do: "Analyzing…"
   defp sentiment_label(nil), do: "Unscored"
   defp sentiment_label(score), do: Analysis.label(score)
-
-  defp format_score(nil), do: "—"
-  defp format_score(score), do: :erlang.float_to_binary(score, decimals: 3)
-
-  defp format_date(nil), do: nil
-
-  defp format_date(%DateTime{} = dt) do
-    diff = DateTime.diff(DateTime.utc_now(), dt, :second)
-
-    cond do
-      diff < 3_600 -> "#{max(div(diff, 60), 1)}m ago"
-      diff < 86_400 -> "#{div(diff, 3600)}h ago"
-      true -> Calendar.strftime(dt, "%b %d")
-    end
-  end
-
-  defp dominant_emotion(nil), do: nil
-
-  defp dominant_emotion(computed_result) do
-    emotions =
-      Map.get(computed_result, :emotions) ||
-        Map.get(computed_result, "emotions") ||
-        %{}
-
-    if map_size(emotions) > 0 do
-      {name, score} = Enum.max_by(emotions, fn {_k, v} -> v || 0.0 end)
-      if score > 0.15, do: {to_string(name), emotion_emoji(to_string(name))}
-    end
-  end
-
-  defp emotion_emoji("joy"), do: "😊"
-  defp emotion_emoji("trust"), do: "🤝"
-  defp emotion_emoji("fear"), do: "😨"
-  defp emotion_emoji("anger"), do: "😠"
-  defp emotion_emoji("sadness"), do: "😢"
-  defp emotion_emoji("anticipation"), do: "🔮"
-  defp emotion_emoji("disgust"), do: "🤢"
-  defp emotion_emoji("surprise"), do: "😲"
-  defp emotion_emoji(_), do: "💬"
-
-  defp loaded_language_high?(nil), do: false
-
-  defp loaded_language_high?(computed_result) do
-    ll =
-      Map.get(computed_result, :loaded_language) ||
-        Map.get(computed_result, "loaded_language") ||
-        0.0
-
-    ll > 0.4
-  end
-
-  # ---------------------------------------------------------------------------
-  # Private helpers
-  # ---------------------------------------------------------------------------
-
-  defp schedule_next_analysis([]), do: :ok
-
-  defp schedule_next_analysis([article | rest]) do
-    Process.send_after(self(), {:analyse_article, article}, @analysis_interval)
-    # Chain remaining articles so they fire one after the previous sends its message.
-    # Each {:analyse_article} handler spawns the task and returns immediately, so
-    # the next schedule fires @analysis_interval ms later regardless of Groq latency.
-    Enum.reduce(rest, @analysis_interval, fn article, delay ->
-      Process.send_after(self(), {:analyse_article, article}, delay + @analysis_interval)
-      delay + @analysis_interval
-    end)
-  end
 end
