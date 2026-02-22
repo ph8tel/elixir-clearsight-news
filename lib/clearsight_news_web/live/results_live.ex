@@ -150,6 +150,7 @@ defmodule ClearsightNewsWeb.ResultsLive do
       <div class="flex items-center gap-4 mb-8">
         <.link navigate={~p"/"} class="btn btn-ghost btn-sm">← Back</.link>
         <h1 class="text-2xl font-bold flex-1">Results for "{@query}"</h1>
+        <p>Select a primary and reference article to compare their rhetoric.</p>
         <button
           :if={@primary && @reference}
           phx-click="compare"
