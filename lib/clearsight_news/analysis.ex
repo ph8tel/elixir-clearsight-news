@@ -188,10 +188,19 @@ defmodule ClearsightNews.Analysis do
   defp instructor_config do
     api_key = Application.get_env(:clearsight_news, :groq_api_key) || System.get_env("GROQ_API_KEY")
 
-    if is_binary(api_key) and api_key != "" do
-      [adapter: Groq, api_key: api_key]
-    else
-      [adapter: Groq]
+    base =
+      if is_binary(api_key) and api_key != "" do
+        [adapter: Groq, api_key: api_key]
+      else
+        [adapter: Groq]
+      end
+
+    # Allows tests to inject Req.Test plug without touching real HTTP.
+    # Set `config :clearsight_news, :instructor_http_options, [plug: {Req.Test, :groq_api}]`
+    # in test.exs to enable stubbing.
+    case Application.get_env(:clearsight_news, :instructor_http_options) do
+      nil -> base
+      http_opts -> Keyword.put(base, :http_options, http_opts)
     end
   end
 

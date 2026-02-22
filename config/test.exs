@@ -32,6 +32,11 @@ config :logger, level: :warning
 # Use the Mox mock for NewsAPI in tests — no real HTTP calls
 config :clearsight_news, :news_api_impl, ClearsightNews.MockNewsApi
 
+# Stub GROQ key so instructor_config/0 includes it; Req.Test intercepts the call.
+config :clearsight_news,
+  groq_api_key: "test-groq-key",
+  instructor_http_options: [plug: {Req.Test, :groq_api}]
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

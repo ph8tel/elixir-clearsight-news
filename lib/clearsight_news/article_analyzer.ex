@@ -39,7 +39,13 @@ defmodule ClearsightNews.ArticleAnalyzer do
       |> Enum.zip(articles)
       |> Enum.map(fn
         {{:ok, article_with_score}, _} -> article_with_score
-        {{:exit, _}, article} -> Map.put(article, :computed_score, nil)
+
+        {{:exit, _}, article} ->
+          article
+          |> Map.put(:computed_score, nil)
+          |> Map.put(:computed_result, nil)
+          |> Map.put(:analysis_status, "error")
+          |> Map.put(:model_name, nil)
       end)
 
     {:ok, analysed}
@@ -85,7 +91,11 @@ defmodule ClearsightNews.ArticleAnalyzer do
     })
     |> Repo.update!()
 
-    Map.put(article, :computed_score, computed_score)
+    article
+    |> Map.put(:computed_score, computed_score)
+    |> Map.put(:computed_result, computed_result)
+    |> Map.put(:analysis_status, status)
+    |> Map.put(:model_name, model_name)
   end
 
   defp deep_struct_to_map(%_struct{} = struct) do
