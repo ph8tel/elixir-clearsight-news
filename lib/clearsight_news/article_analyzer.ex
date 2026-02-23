@@ -91,18 +91,8 @@ defmodule ClearsightNews.ArticleAnalyzer do
 
   @doc "Run sentiment analysis for a single article and persist the ModelResponse row."
   def run_sentiment(article) do
-    model_name = System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.3-70b-versatile")
+    model_name = System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.1-8b-instant")
     text = article.content || article.description || ""
-
-    {:ok, response} =
-      %ModelResponse{}
-      |> ModelResponse.changeset(%{
-        article_id: article.id,
-        response_type: "sentiment",
-        model_name: model_name,
-        status: "pending"
-      })
-      |> Repo.insert()
 
     start = System.monotonic_time(:millisecond)
 
@@ -119,15 +109,20 @@ defmodule ClearsightNews.ArticleAnalyzer do
 
     latency_ms = System.monotonic_time(:millisecond) - start
 
-    response
-    |> ModelResponse.complete_changeset(%{
+    # Single atomic insert — avoids the orphan "pending" row from the old
+    # insert+update two-step, which caused accumulation of stale rows.
+    %ModelResponse{}
+    |> ModelResponse.changeset(%{
+      article_id: article.id,
+      response_type: "sentiment",
+      model_name: model_name,
       status: status,
       latency_ms: latency_ms,
       computed_score: computed_score,
       computed_result: computed_result,
       error_message: error_message
     })
-    |> Repo.update!()
+    |> Repo.insert!()
 
     article
     |> Map.put(:computed_score, computed_score)

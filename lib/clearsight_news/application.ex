@@ -13,6 +13,7 @@ defmodule ClearsightNews.Application do
       {DNSCluster, query: Application.get_env(:clearsight_news, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ClearsightNews.PubSub},
       {Task.Supervisor, name: ClearsightNews.TaskSupervisor},
+      ClearsightNews.Cleaner,
       # Start to serve requests, typically the last entry
       ClearsightNewsWeb.Endpoint
     ]
