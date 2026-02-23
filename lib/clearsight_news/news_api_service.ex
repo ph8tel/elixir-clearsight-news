@@ -15,6 +15,7 @@ defmodule ClearsightNews.NewsApiService do
   @base_url "https://newsapi.org/v2/everything"
   @top_headlines_url "https://newsapi.org/v2/top-headlines"
   @default_max 15
+  @default_page_size 100
 
   @doc """
   Returns the configured NewsApi implementation module.
@@ -31,9 +32,13 @@ defmodule ClearsightNews.NewsApiService do
       api_key = Application.get_env(:clearsight_news, :news_api_key)
       max = Keyword.get(opts, :max, @default_max)
 
+      # Fetch more articles than we need to ensure good coverage
+      # Fetch 3x more than needed, max 100
+      page_size = min(max * 3, @default_page_size)
+
       params = [
         q: query,
-        pageSize: min(max, 100),
+        pageSize: page_size,
         sortBy: "publishedAt",
         language: "en",
         apiKey: api_key
@@ -45,6 +50,7 @@ defmodule ClearsightNews.NewsApiService do
             raw_articles
             |> Enum.map(&process_article/1)
             |> Enum.reject(&is_nil/1)
+            |> filter_relevant_articles(query)
             |> Enum.take(max)
 
           {:ok, articles}
@@ -123,5 +129,23 @@ defmodule ClearsightNews.NewsApiService do
       {:ok, dt, _offset} -> DateTime.truncate(dt, :second)
       _ -> nil
     end
+  end
+
+  # Filter articles to ensure they are relevant to the search query
+  defp filter_relevant_articles(articles, query) do
+    query_lower = String.downcase(query)
+
+    articles
+    |> Enum.filter(fn article ->
+      # Safely handle nil fields
+      title_lower = String.downcase(article.title || "")
+      description_lower = String.downcase(article.description || "")
+      content_lower = String.downcase(article.content || "")
+
+      # Simple relevance check - if query appears in any of these fields
+      String.contains?(title_lower, query_lower) ||
+        String.contains?(description_lower, query_lower) ||
+        String.contains?(content_lower, query_lower)
+    end)
   end
 end

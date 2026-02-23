@@ -38,23 +38,25 @@ Every LLM call is recorded as a `model_responses` row with `status`, `latency_ms
 SearchLive / ResultsLive
   └─ ArticleAnalyzer.upsert_articles/1   # fast DB upsert, returns cached scores
   └─ ArticleAnalyzer.run_sentiment/1     # Groq call, persists ModelResponse
-       └─ Analysis.analyse_sentiment/1   # Instructor + Groq structured output
+       └─ Analysis.analyse_sentiment/1   # direct Req call + manual cast (no Instructor)
 
 CompareLive
-  └─ Analysis.analyse_rhetoric/1
-  └─ Analysis.analyse_comparison/2
+  └─ Analysis.analyse_rhetoric/1         # Instructor + Groq tool-calling
+  └─ Analysis.analyse_comparison/2       # Instructor + Groq tool-calling
 ```
 
 - `NewsApi` behaviour + `NewsApiService` (Req-backed) keeps the HTTP client swappable for tests (Mox).
 - Trickle analysis: `Process.send_after` chains per-article tasks so the UI updates as each result arrives rather than waiting for a batch.
-- Model names are read at runtime from env vars (`GROQ_SENTIMENT_MODEL`, `GROQ_RHETORIC_MODEL`, `GROQ_COMPARISON_MODEL`), defaulting to `llama-3.3-70b-versatile`.
+- **Sentiment** uses a direct `Req` call (bypassing Instructor's tool-calling protocol) with `llama-3.1-8b-instant`. `instructor 0.1.0`'s Groq adapter only supports `:tools` mode, which the 8b model handles inconsistently, producing `<function=Schema>` text that Groq rejects with HTTP 400. The direct call receives plain JSON in the `content` field, which the 8b model returns reliably.
+- **Rhetoric and comparison** use Instructor + `llama-3.3-70b-versatile`, which handles tool-calling correctly.
+- Model names are read at runtime from env vars (`GROQ_SENTIMENT_MODEL`, `GROQ_RHETORIC_MODEL`, `GROQ_COMPARISON_MODEL`).
 
 ## Stack
 
 - Elixir / Phoenix 1.8 / LiveView
 - Ecto + PostgreSQL
-- Req (NewsAPI client)
-- Instructor + Groq (`llama-3.3-70b-versatile`)
+- Req (NewsAPI + direct Groq sentiment client)
+- Instructor + Groq (`llama-3.3-70b-versatile` for rhetoric/comparison)
 - Tailwind CSS + daisyUI
 
 ## Local development
@@ -105,10 +107,10 @@ Required secrets (set with `fly secrets set KEY=value`):
 | `GROQ_API_KEY` | Groq API key |
 | `NEWS_API_KEY` | NewsAPI.org key |
 
-Optional model overrides (default `llama-3.3-70b-versatile`):
+Optional model overrides:
 
 | Secret | Default |
 |---|---|
-| `GROQ_SENTIMENT_MODEL` | `llama-3.3-70b-versatile` |
+| `GROQ_SENTIMENT_MODEL` | `llama-3.1-8b-instant` |
 | `GROQ_RHETORIC_MODEL` | `llama-3.3-70b-versatile` |
 | `GROQ_COMPARISON_MODEL` | `llama-3.3-70b-versatile` |
