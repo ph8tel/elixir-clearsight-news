@@ -2,18 +2,25 @@ defmodule ClearsightNews.Analysis do
   @moduledoc """
   Public API for Groq-backed article analysis.
 
-  All three analysis types go through `instructor`, which handles JSON
-  parsing, validation, and retries automatically. Each function returns
-  `{:ok, result_struct}` or `{:error, reason}`.
+  `analyse_sentiment/1` makes a direct `Req` call to avoid Instructor's
+  tool-calling protocol, which `llama-3.1-8b-instant` handles inconsistently
+  on Groq. It parses the JSON content field and casts it into `%SentimentResult{}`
+  manually, retrying up to 3 times on parse failure.
+
+  `analyse_rhetoric/1` and `analyse_comparison/2` go through `Instructor` with
+  `llama-3.3-70b-versatile`, which handles tool-calling reliably.
+
+  All functions return `{:ok, result_struct}` or `{:error, reason}`.
 
   Model names are read from env vars **at runtime** on every call so that
   Fly secrets take effect without redeploying:
-  - GROQ_SENTIMENT_MODEL  (default: llama-3.3-70b-versatile)
+  - GROQ_SENTIMENT_MODEL  (default: llama-3.1-8b-instant)
   - GROQ_RHETORIC_MODEL   (default: llama-3.3-70b-versatile)
   - GROQ_COMPARISON_MODEL (default: llama-3.3-70b-versatile)
   """
 
-  alias ClearsightNews.Analysis.{SentimentResult, RhetoricResult, ComparisonResult}
+  alias ClearsightNews.Analysis.{SentimentResult, RhetoricResult, ComparisonResult,
+                                   Emotions, Rhetoric, Certainty}
   alias Instructor.Adapters.Groq
 
   # Articles are truncated to 4000 chars before being sent to the model,
@@ -22,6 +29,37 @@ defmodule ClearsightNews.Analysis do
 
   # Classification threshold — matches Python _THRESHOLD = 0.1
   @threshold 0.1
+
+  # System prompt for direct sentiment Req call. Kept as a module attribute so
+  # it is easy to find and update without digging into function bodies.
+  @sentiment_system_prompt """
+  You are a classification engine. Follow these rules exactly.
+
+  RULES:
+  - Output MUST be valid JSON.
+  - Do NOT include any text outside the JSON.
+  - Do NOT include markdown, code fences, or explanations.
+  - Do NOT add fields not listed in the schema.
+  - Every field MUST be present, even if the value is 0.0.
+  - All numeric values must be floats between 0.0 and 1.0.
+
+  SCHEMA (your output MUST match this exactly):
+  {
+    "tone": "positive" | "neutral" | "negative",
+    "emotions": {
+      "joy": 0.0, "trust": 0.0, "fear": 0.0, "anger": 0.0,
+      "sadness": 0.0, "anticipation": 0.0, "disgust": 0.0, "surprise": 0.0
+    },
+    "rhetoric": {
+      "analytical": 0.0, "supportive": 0.0, "persuasive": 0.0,
+      "alarmist": 0.0, "dismissive": 0.0, "sarcastic": 0.0
+    },
+    "loaded_language": 0.0,
+    "certainty": { "certainty": 0.0, "speculation": 0.0 }
+  }
+
+  REMEMBER: respond with JSON only.
+  """
 
   # ---------------------------------------------------------------------------
   # Public functions
@@ -35,40 +73,33 @@ defmodule ClearsightNews.Analysis do
   `classify/1` for convenience.
   """
   def analyse_sentiment(text) when is_binary(text) do
-    model = System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.3-70b-versatile")
+    model = System.get_env("GROQ_SENTIMENT_MODEL", "llama-3.1-8b-instant")
 
-    Instructor.chat_completion(
-      [
-        model: model,
-        response_model: SentimentResult,
-        max_retries: 3,
-        messages: [
-          %{
-            role: "system",
-            content: """
-            You are a structured news article analyst. You MUST respond ONLY with a JSON object
-            that has exactly these top-level keys: tone, emotions, rhetoric, loaded_language, certainty.
-            - tone: one of "positive", "neutral", "negative"
-            - emotions: object with keys joy, trust, fear, anger, sadness, anticipation, disgust, surprise (each 0.0–1.0)
-            - rhetoric: object with keys analytical, supportive, persuasive, alarmist, dismissive, sarcastic (each 0.0–1.0)
-            - loaded_language: float 0.0–1.0
-            - certainty: object with keys certainty and speculation (each 0.0–1.0)
-            Do NOT include any other keys. Do NOT include article_body, language, or any other fields.
-            """
-          },
-          %{
-            role: "user",
-            content: """
-            Analyse the sentiment of the following article.
+    api_key =
+      Application.get_env(:clearsight_news, :groq_api_key) || System.get_env("GROQ_API_KEY")
 
-            Article:
-            #{truncate(text)}
-            """
-          }
-        ]
+    body = %{
+      model: model,
+      messages: [
+        %{role: "system", content: @sentiment_system_prompt},
+        %{
+          role: "user",
+          content: "Analyse the sentiment of the following article.\n\nArticle:\n#{truncate(text)}"
+        }
       ],
-      instructor_config()
-    )
+      temperature: 0,
+      max_tokens: 512
+    }
+
+    # Reuses :instructor_http_options so Req.Test stubs work in tests
+    # without any extra config (test.exs already sets this to Req.Test :groq_api).
+    req_opts =
+      case Application.get_env(:clearsight_news, :instructor_http_options) do
+        nil -> [receive_timeout: 60_000]
+        http_opts -> [receive_timeout: 60_000] ++ http_opts
+      end
+
+    do_sentiment_request(api_key, body, req_opts, 3)
   end
 
   @doc """
@@ -247,6 +278,68 @@ defmodule ClearsightNews.Analysis do
     case Application.get_env(:clearsight_news, :instructor_http_options) do
       nil -> base
       http_opts -> Keyword.put(base, :http_options, http_opts)
+    end
+  end
+
+  defp do_sentiment_request(_api_key, _body, _opts, 0) do
+    {:error, "sentiment analysis failed after 3 attempts"}
+  end
+
+  defp do_sentiment_request(api_key, body, opts, attempts_remaining) do
+    case Req.post("https://api.groq.com/openai/v1/chat/completions",
+           [auth: {:bearer, api_key}, json: body] ++ opts
+         ) do
+      {:ok, %{status: 200} = response} ->
+        content = get_in(response.body, ["choices", Access.at(0), "message", "content"])
+
+        case cast_sentiment_result(content) do
+          {:ok, _} = ok -> ok
+          {:error, _} -> do_sentiment_request(api_key, body, opts, attempts_remaining - 1)
+        end
+
+      {:ok, %{status: status}} ->
+        {:error, "Groq API returned HTTP #{status}"}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp cast_sentiment_result(nil), do: {:error, "empty response from model"}
+
+  defp cast_sentiment_result(content) do
+    with {:ok, raw} <- Jason.decode(content) do
+      em = raw["emotions"] || %{}
+      rh = raw["rhetoric"] || %{}
+      cert = raw["certainty"] || %{}
+
+      {:ok,
+       %SentimentResult{
+         tone: raw["tone"],
+         loaded_language: raw["loaded_language"] || 0.0,
+         emotions: %Emotions{
+           joy: em["joy"] || 0.0,
+           trust: em["trust"] || 0.0,
+           fear: em["fear"] || 0.0,
+           anger: em["anger"] || 0.0,
+           sadness: em["sadness"] || 0.0,
+           anticipation: em["anticipation"] || 0.0,
+           disgust: em["disgust"] || 0.0,
+           surprise: em["surprise"] || 0.0
+         },
+         rhetoric: %Rhetoric{
+           analytical: rh["analytical"] || 0.0,
+           supportive: rh["supportive"] || 0.0,
+           persuasive: rh["persuasive"] || 0.0,
+           alarmist: rh["alarmist"] || 0.0,
+           dismissive: rh["dismissive"] || 0.0,
+           sarcastic: rh["sarcastic"] || 0.0
+         },
+         certainty: %Certainty{
+           certainty: cert["certainty"] || 0.0,
+           speculation: cert["speculation"] || 0.0
+         }
+       }}
     end
   end
 
