@@ -2,6 +2,7 @@ defmodule ClearsightNewsWeb.CompareLive do
   use ClearsightNewsWeb, :live_view
 
   alias ClearsightNews.{Article, Analysis, ArticleAnalyzer, ModelResponse, Repo}
+  import Ecto.Query
 
   @impl true
   def mount(%{"primary" => p_id, "reference" => r_id}, _session, socket) do
@@ -214,36 +215,51 @@ defmodule ClearsightNewsWeb.CompareLive do
     model_name = System.get_env("GROQ_RHETORIC_MODEL", "llama-3.3-70b-versatile")
     text = article.content || ""
 
-    {:ok, response} =
-      %ModelResponse{}
-      |> ModelResponse.changeset(%{
-        article_id: article.id,
-        response_type: "rhetoric",
-        model_name: model_name,
-        status: "pending"
+    existing =
+      Repo.one(
+        from mr in ModelResponse,
+          where:
+            mr.article_id == ^article.id and
+              mr.response_type == "rhetoric" and
+              mr.status == "complete",
+          order_by: [desc: mr.inserted_at],
+          limit: 1
+      )
+
+    if existing && is_map(existing.computed_result) && map_size(existing.computed_result) > 0 do
+      {:ok, %{result: rhetoric_result_from_map(existing.computed_result)}}
+    else
+      {:ok, response} =
+        %ModelResponse{}
+        |> ModelResponse.changeset(%{
+          article_id: article.id,
+          response_type: "rhetoric",
+          model_name: model_name,
+          status: "pending"
+        })
+        |> Repo.insert()
+
+      start = System.monotonic_time(:millisecond)
+
+      {status, result, error_message} =
+        case Analysis.analyse_rhetoric(text) do
+          {:ok, r} -> {"complete", r, nil}
+          {:error, reason} -> {"error", nil, inspect(reason)}
+        end
+
+      latency_ms = System.monotonic_time(:millisecond) - start
+
+      response
+      |> ModelResponse.complete_changeset(%{
+        status: status,
+        latency_ms: latency_ms,
+        computed_result: result && ArticleAnalyzer.deep_struct_to_map(result),
+        error_message: error_message
       })
-      |> Repo.insert()
+      |> Repo.update!()
 
-    start = System.monotonic_time(:millisecond)
-
-    {status, result, error_message} =
-      case Analysis.analyse_rhetoric(text) do
-        {:ok, r} -> {"complete", r, nil}
-        {:error, reason} -> {"error", nil, inspect(reason)}
-      end
-
-    latency_ms = System.monotonic_time(:millisecond) - start
-
-    response
-    |> ModelResponse.complete_changeset(%{
-      status: status,
-      latency_ms: latency_ms,
-      computed_result: result && ArticleAnalyzer.deep_struct_to_map(result),
-      error_message: error_message
-    })
-    |> Repo.update!()
-
-    {:ok, %{result: result}}
+      {:ok, %{result: result}}
+    end
   end
 
   defp run_comparison(primary, reference) do
@@ -251,36 +267,83 @@ defmodule ClearsightNewsWeb.CompareLive do
     primary_text = primary.content || ""
     reference_text = reference.content || ""
 
-    {:ok, response} =
-      %ModelResponse{}
-      |> ModelResponse.changeset(%{
-        article_id: primary.id,
-        reference_article_id: reference.id,
-        response_type: "comparison",
-        model_name: model_name,
-        status: "pending"
+    existing =
+      Repo.one(
+        from mr in ModelResponse,
+          where:
+            mr.article_id == ^primary.id and
+              mr.reference_article_id == ^reference.id and
+              mr.response_type == "comparison" and
+              mr.status == "complete",
+          order_by: [desc: mr.inserted_at],
+          limit: 1
+      )
+
+    if existing && existing.computed_result do
+      {:ok, %{result: comparison_result_from_map(existing.computed_result)}}
+    else
+      {:ok, response} =
+        %ModelResponse{}
+        |> ModelResponse.changeset(%{
+          article_id: primary.id,
+          reference_article_id: reference.id,
+          response_type: "comparison",
+          model_name: model_name,
+          status: "pending"
+        })
+        |> Repo.insert()
+
+      start = System.monotonic_time(:millisecond)
+
+      {status, result, error_message} =
+        case Analysis.analyse_comparison(primary_text, reference_text) do
+          {:ok, r} -> {"complete", r, nil}
+          {:error, reason} -> {"error", nil, inspect(reason)}
+        end
+
+      latency_ms = System.monotonic_time(:millisecond) - start
+
+      response
+      |> ModelResponse.complete_changeset(%{
+        status: status,
+        latency_ms: latency_ms,
+        computed_result: result && ArticleAnalyzer.deep_struct_to_map(result),
+        error_message: error_message
       })
-      |> Repo.insert()
+      |> Repo.update!()
 
-    start = System.monotonic_time(:millisecond)
+      {:ok, %{result: result}}
+    end
+  end
 
-    {status, result, error_message} =
-      case Analysis.analyse_comparison(primary_text, reference_text) do
-        {:ok, r} -> {"complete", r, nil}
-        {:error, reason} -> {"error", nil, inspect(reason)}
-      end
+  # ---------------------------------------------------------------------------
+  # Cached-result reconstruction helpers
+  # Postgres returns JSONB as string-keyed maps; these rebuild the structs
+  # so the existing templates work without changes.
+  # ---------------------------------------------------------------------------
 
-    latency_ms = System.monotonic_time(:millisecond) - start
+  defp rhetoric_result_from_map(m) do
+    %ClearsightNews.Analysis.RhetoricResult{
+      overall_tone: m["overall_tone"],
+      sentiment_label: m["sentiment_label"],
+      bias_indicators: m["bias_indicators"] || [],
+      rhetorical_devices:
+        Enum.map(m["rhetorical_devices"] || [], fn d ->
+          %ClearsightNews.Analysis.RhetoricalDevice{
+            device: d["device"],
+            example: d["example"]
+          }
+        end)
+    }
+  end
 
-    response
-    |> ModelResponse.complete_changeset(%{
-      status: status,
-      latency_ms: latency_ms,
-      computed_result: result && ArticleAnalyzer.deep_struct_to_map(result),
-      error_message: error_message
-    })
-    |> Repo.update!()
-
-    {:ok, %{result: result}}
+  defp comparison_result_from_map(m) do
+    %ClearsightNews.Analysis.ComparisonResult{
+      framing_differences: m["framing_differences"],
+      tone_comparison: m["tone_comparison"],
+      source_selection: m["source_selection"],
+      key_differences: m["key_differences"],
+      bias_assessment: m["bias_assessment"]
+    }
   end
 end
