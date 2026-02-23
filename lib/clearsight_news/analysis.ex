@@ -23,6 +23,8 @@ defmodule ClearsightNews.Analysis do
                                    Emotions, Rhetoric, Certainty}
   alias Instructor.Adapters.Groq
 
+  require Logger
+
   # Articles are truncated to 4000 chars before being sent to the model,
   # matching the Python _truncate_text() behaviour.
   @max_chars 4000
@@ -281,11 +283,14 @@ defmodule ClearsightNews.Analysis do
     end
   end
 
-  defp do_sentiment_request(_api_key, _body, _opts, 0) do
+  defp do_sentiment_request(api_key, body, opts, attempts_remaining, last_error \\ nil)
+
+  defp do_sentiment_request(_api_key, _body, _opts, 0, last_error) do
+    Logger.error("[Analysis] sentiment analysis failed after 3 attempts: #{inspect(last_error)}")
     {:error, "sentiment analysis failed after 3 attempts"}
   end
 
-  defp do_sentiment_request(api_key, body, opts, attempts_remaining) do
+  defp do_sentiment_request(api_key, body, opts, attempts_remaining, _last_error) do
     case Req.post("https://api.groq.com/openai/v1/chat/completions",
            [auth: {:bearer, api_key}, json: body] ++ opts
          ) do
@@ -294,7 +299,7 @@ defmodule ClearsightNews.Analysis do
 
         case cast_sentiment_result(content) do
           {:ok, _} = ok -> ok
-          {:error, _} -> do_sentiment_request(api_key, body, opts, attempts_remaining - 1)
+          {:error, reason} -> do_sentiment_request(api_key, body, opts, attempts_remaining - 1, reason)
         end
 
       {:ok, %{status: status}} ->
@@ -315,7 +320,7 @@ defmodule ClearsightNews.Analysis do
 
       {:ok,
        %SentimentResult{
-         tone: raw["tone"],
+         tone: raw["tone"] || "neutral",
          loaded_language: raw["loaded_language"] || 0.0,
          emotions: %Emotions{
            joy: em["joy"] || 0.0,
