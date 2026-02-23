@@ -55,6 +55,4 @@ Thumbs.db
 *.sqlite3-*
 .history
 
-# Generated release artifacts
-/rel/overlays/bin/
 
