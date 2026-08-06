@@ -48,11 +48,15 @@ defmodule ClearsightNewsWeb.SearchLive do
           {:ok, raw_articles} ->
             case ArticleAnalyzer.upsert_articles(raw_articles) do
               {:ok, articles} -> send(lv, {:headlines_ready, articles})
-              _ -> send(lv, :headlines_failed)
+              {:error, reason} -> send(lv, {:headlines_failed, "DB error: #{inspect(reason)}"})
+              other -> send(lv, {:headlines_failed, "DB error: #{inspect(other)}"})
             end
 
+          {:error, reason} ->
+            send(lv, {:headlines_failed, reason})
+
           _ ->
-            send(lv, :headlines_failed)
+            send(lv, {:headlines_failed, "Unknown API error"})
         end
       end)
 
@@ -73,8 +77,13 @@ defmodule ClearsightNewsWeb.SearchLive do
     {:noreply, socket}
   end
 
-  def handle_info(:headlines_failed, socket) do
-    {:noreply, assign(socket, headlines: :error)}
+  def handle_info({:headlines_failed, reason}, socket) do
+    socket =
+      socket
+      |> assign(headlines: :error)
+      |> put_flash(:error, "Could not load latest articles: #{reason}")
+
+    {:noreply, socket}
   end
 
   def handle_info({:analyse_article, article}, socket) do
@@ -110,28 +119,33 @@ defmodule ClearsightNewsWeb.SearchLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="min-h-screen px-4 py-12">
+    <div class="min-h-screen px-4 py-8 md:py-12">
       <.flash kind={:error} flash={@flash} />
       <.flash kind={:info} flash={@flash} />
 
       <div class="max-w-7xl mx-auto">
         <%!-- Search bar --%>
-        <div class="flex flex-col items-center mb-14">
-          <h1 class="text-4xl font-bold text-center mb-2">ClearSight News</h1>
-          <h2 class="text-2xl font-bold text-center mb-2">AI News Analysis</h2>
-          <p class="text-center text-base-content/60 mb-10">
+        <div class="flex flex-col items-center mb-10 md:mb-14">
+          <h1 class="text-3xl md:text-4xl font-bold text-center mb-2">ClearSight News</h1>
+          <h2 class="text-xl md:text-2xl font-bold text-center mb-2">AI News Analysis</h2>
+          <p class="text-center text-base-content/60 mb-8 md:mb-10 max-w-2xl">
             Search for news articles by topic, then pick any two to compare how their tone and rhetoric differ.
           </p>
-          <.form for={%{}} as={:search} phx-submit="search" class="flex gap-2 w-full max-w-2xl">
+          <.form
+            for={%{}}
+            as={:search}
+            phx-submit="search"
+            class="flex flex-col sm:flex-row gap-2 w-full max-w-2xl"
+          >
             <input
               type="text"
               name="search[query]"
               value={@query}
               placeholder="e.g. climate policy, inflation, election..."
-              class="input input-bordered flex-1 text-lg"
+              class="input input-bordered w-full sm:flex-1 text-base sm:text-lg"
               autofocus
             />
-            <button type="submit" class="btn btn-primary px-6">Search</button>
+            <button type="submit" class="btn btn-primary w-full sm:w-auto px-6">Search</button>
           </.form>
         </div>
 

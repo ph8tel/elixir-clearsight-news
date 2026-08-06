@@ -29,79 +29,97 @@ defmodule ClearsightNews.NewsApiService do
     if String.trim(query) == "" do
       {:error, "Query cannot be empty"}
     else
-      api_key = Application.get_env(:clearsight_news, :news_api_key)
-      max = Keyword.get(opts, :max, @default_max)
+      case news_api_key() do
+        {:ok, api_key} ->
+          max = Keyword.get(opts, :max, @default_max)
 
-      # Fetch more articles than we need to ensure good coverage
-      # Fetch 3x more than needed, max 100
-      page_size = min(max * 3, @default_page_size)
+          # Fetch more articles than we need to ensure good coverage
+          # Fetch 3x more than needed, max 100
+          page_size = min(max * 3, @default_page_size)
 
-      params = [
-        q: query,
-        pageSize: page_size,
-        sortBy: "publishedAt",
-        language: "en",
-        apiKey: api_key
-      ]
+          params = [
+            q: query,
+            pageSize: page_size,
+            sortBy: "publishedAt",
+            language: "en",
+            apiKey: api_key
+          ]
 
-      case Req.get(@base_url, params: params) do
-        {:ok, %{status: 200, body: %{"status" => "ok", "articles" => raw_articles}}} ->
-          articles =
-            raw_articles
-            |> Enum.map(&process_article/1)
-            |> Enum.reject(&is_nil/1)
-            |> filter_relevant_articles(query)
-            |> Enum.take(max)
+          case Req.get(@base_url, params: params) do
+            {:ok, %{status: 200, body: %{"status" => "ok", "articles" => raw_articles}}} ->
+              articles =
+                raw_articles
+                |> Enum.map(&process_article/1)
+                |> Enum.reject(&is_nil/1)
+                |> filter_relevant_articles(query)
+                |> Enum.take(max)
 
-          {:ok, articles}
+              {:ok, articles}
 
-        {:ok, %{status: 200, body: %{"status" => status, "message" => message}}} ->
-          {:error, "NewsAPI error #{status}: #{message}"}
+            {:ok, %{status: 200, body: %{"status" => status, "message" => message}}} ->
+              {:error, "NewsAPI error #{status}: #{message}"}
 
-        {:ok, %{status: status}} ->
-          {:error, "NewsAPI returned HTTP #{status}"}
+            {:ok, %{status: status}} ->
+              {:error, "NewsAPI returned HTTP #{status}"}
 
-        {:error, exception} ->
-          {:error, "Request failed: #{Exception.message(exception)}"}
+            {:error, exception} ->
+              {:error, "Request failed: #{Exception.message(exception)}"}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
 
   @impl true
   def top_headlines(opts \\ []) do
-    api_key = Application.get_env(:clearsight_news, :news_api_key)
-    max = Keyword.get(opts, :max, 9)
+    case news_api_key() do
+      {:ok, api_key} ->
+        max = Keyword.get(opts, :max, 9)
+        country = Keyword.get(opts, :country, "us")
 
-    params = [
-      pageSize: min(max, 100),
-      language: "en",
-      apiKey: api_key
-    ]
+        params = [
+          country: country,
+          pageSize: min(max, 100),
+          apiKey: api_key
+        ]
 
-    case Req.get(@top_headlines_url, params: params) do
-      {:ok, %{status: 200, body: %{"status" => "ok", "articles" => raw_articles}}} ->
-        articles =
-          raw_articles
-          |> Enum.map(&process_article/1)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.take(max)
+        case Req.get(@top_headlines_url, params: params) do
+          {:ok, %{status: 200, body: %{"status" => "ok", "articles" => raw_articles}}} ->
+            articles =
+              raw_articles
+              |> Enum.map(&process_article/1)
+              |> Enum.reject(&is_nil/1)
+              |> Enum.take(max)
 
-        {:ok, articles}
+            {:ok, articles}
 
-      {:ok, %{status: 200, body: %{"status" => status, "message" => message}}} ->
-        {:error, "NewsAPI error #{status}: #{message}"}
+          {:ok, %{status: 200, body: %{"status" => status, "message" => message}}} ->
+            {:error, "NewsAPI error #{status}: #{message}"}
 
-      {:ok, %{status: status}} ->
-        {:error, "NewsAPI returned HTTP #{status}"}
+          {:ok, %{status: status}} ->
+            {:error, "NewsAPI returned HTTP #{status}"}
 
-      {:error, exception} ->
-        {:error, "Request failed: #{Exception.message(exception)}"}
+          {:error, exception} ->
+            {:error, "Request failed: #{Exception.message(exception)}"}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  defp news_api_key do
+    case Application.get_env(:clearsight_news, :news_api_key) || System.get_env("NEWS_API_KEY") do
+      key when is_binary(key) and key != "" -> {:ok, key}
+      _ -> {:error, "NEWS_API_KEY is missing"}
+    end
+  end
 
   defp process_article(article) do
     title = article["title"] || ""

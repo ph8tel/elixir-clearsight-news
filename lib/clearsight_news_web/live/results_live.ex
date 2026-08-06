@@ -3,6 +3,8 @@ defmodule ClearsightNewsWeb.ResultsLive do
 
   alias ClearsightNews.{Analysis, ArticleAnalyzer, NewsApiService}
 
+  @mobile_sentiment_tabs ["positive", "neutral", "negative"]
+
   @impl true
   def mount(%{"q" => query}, _session, socket) do
     q = String.trim(query)
@@ -11,6 +13,7 @@ defmodule ClearsightNewsWeb.ResultsLive do
       socket
       |> assign(query: q, page_title: "#{q} · ClearSight")
       |> assign(primary: nil, reference: nil)
+      |> assign(active_sentiment_tab: "positive")
       |> assign(articles: :loading, fetch_error: nil)
 
     if connected?(socket) do
@@ -45,6 +48,14 @@ defmodule ClearsightNewsWeb.ResultsLive do
     else
       {:noreply, put_flash(socket, :error, "Select two different articles to compare.")}
     end
+  end
+
+  def handle_event("switch_tab", %{"tab" => tab}, socket) when tab in @mobile_sentiment_tabs do
+    {:noreply, assign(socket, active_sentiment_tab: tab)}
+  end
+
+  def handle_event("switch_tab", _params, socket) do
+    {:noreply, socket}
   end
 
   # ---------------------------------------------------------------------------
@@ -147,22 +158,41 @@ defmodule ClearsightNewsWeb.ResultsLive do
     ~H"""
     <div class="max-w-7xl mx-auto px-4 py-8">
       <%!-- Header --%>
-      <div class="flex items-center gap-4 mb-8">
-        <.link navigate={~p"/"} class="btn btn-ghost btn-sm">← Back</.link>
-        <h1 class="text-2xl font-bold flex-1">Results for "{@query}"</h1>
-        <p>Select a primary and reference article to compare their rhetoric.</p>
-        <button
-          :if={@primary && @reference}
-          phx-click="compare"
-          class="btn btn-primary"
-        >
-          Compare Selected
-        </button>
+      <div class="mb-8 space-y-3">
+        <div class="space-y-2 md:flex md:items-start md:justify-between md:gap-6 md:space-y-0">
+          <h1 id="results-title" class="text-2xl font-bold">Results for: "{@query}"</h1>
+          <p class="text-sm text-base-content/70 md:max-w-xl md:text-right">
+            Select a primary and reference article to compare their rhetoric.
+          </p>
+        </div>
+
+        <div id="results-header-actions" class="flex flex-wrap items-center gap-2 md:justify-between">
+          <.link navigate={~p"/"} class="btn btn-ghost btn-sm">← Back</.link>
+          <button
+            :if={@primary && @reference}
+            phx-click="compare"
+            class="btn btn-primary btn-sm md:btn-md"
+          >
+            Compare Selected
+          </button>
+        </div>
       </div>
 
       <%= cond do %>
         <% @articles == :loading -> %>
-          <div class="grid grid-cols-3 gap-6">
+          <div class="md:hidden">
+            <.mobile_tabs
+              active_tab={@active_sentiment_tab}
+              positive_count={0}
+              neutral_count={0}
+              negative_count={0}
+            />
+            <div id="mobile-active-column" role="tabpanel" class="mt-4">
+              <.column_skeleton label={tab_label(@active_sentiment_tab)} />
+            </div>
+          </div>
+
+          <div class="hidden md:grid md:grid-cols-3 gap-6">
             <.column_skeleton label="Positive" />
             <.column_skeleton label="Neutral" />
             <.column_skeleton label="Negative" />
@@ -172,7 +202,41 @@ defmodule ClearsightNewsWeb.ResultsLive do
             Failed to load articles. Please try again.
           </div>
         <% true -> %>
-          <div class="grid grid-cols-3 gap-6">
+          <div class="md:hidden">
+            <.mobile_tabs
+              active_tab={@active_sentiment_tab}
+              positive_count={length(@col_positive)}
+              neutral_count={length(@col_neutral)}
+              negative_count={length(@col_negative)}
+            />
+            <div id="mobile-active-column" role="tabpanel" class="mt-4">
+              <%= case @active_sentiment_tab do %>
+                <% "positive" -> %>
+                  <.column
+                    label="Positive"
+                    articles={@col_positive}
+                    primary={@primary}
+                    reference={@reference}
+                  />
+                <% "negative" -> %>
+                  <.column
+                    label="Negative"
+                    articles={@col_negative}
+                    primary={@primary}
+                    reference={@reference}
+                  />
+                <% _ -> %>
+                  <.column
+                    label="Neutral"
+                    articles={@col_neutral}
+                    primary={@primary}
+                    reference={@reference}
+                  />
+              <% end %>
+            </div>
+          </div>
+
+          <div class="hidden md:grid md:grid-cols-3 gap-6">
             <.column
               label="Positive"
               articles={@col_positive}
@@ -234,6 +298,65 @@ defmodule ClearsightNewsWeb.ResultsLive do
         {@label}
       </h2>
       <div :for={_ <- 1..3} class="card bg-base-200 mb-3 h-32 animate-pulse" />
+    </div>
+    """
+  end
+
+  attr :active_tab, :string, required: true
+  attr :positive_count, :integer, required: true
+  attr :neutral_count, :integer, required: true
+  attr :negative_count, :integer, required: true
+
+  defp mobile_tabs(assigns) do
+    ~H"""
+    <div
+      id="results-mobile-tabs"
+      role="tablist"
+      aria-label="Sentiment tabs"
+      class="tabs tabs-boxed w-full"
+    >
+      <button
+        id="tab-positive"
+        role="tab"
+        type="button"
+        phx-click="switch_tab"
+        phx-value-tab="positive"
+        aria-selected={@active_tab == "positive"}
+        class={[
+          "tab flex-1",
+          @active_tab == "positive" && "tab-active text-success"
+        ]}
+      >
+        Positive <span class="badge badge-sm ml-1">{@positive_count}</span>
+      </button>
+      <button
+        id="tab-neutral"
+        role="tab"
+        type="button"
+        phx-click="switch_tab"
+        phx-value-tab="neutral"
+        aria-selected={@active_tab == "neutral"}
+        class={[
+          "tab flex-1",
+          @active_tab == "neutral" && "tab-active"
+        ]}
+      >
+        Neutral <span class="badge badge-sm ml-1">{@neutral_count}</span>
+      </button>
+      <button
+        id="tab-negative"
+        role="tab"
+        type="button"
+        phx-click="switch_tab"
+        phx-value-tab="negative"
+        aria-selected={@active_tab == "negative"}
+        class={[
+          "tab flex-1",
+          @active_tab == "negative" && "tab-active text-error"
+        ]}
+      >
+        Negative <span class="badge badge-sm ml-1">{@negative_count}</span>
+      </button>
     </div>
     """
   end
@@ -322,4 +445,8 @@ defmodule ClearsightNewsWeb.ResultsLive do
   defp label_class("Positive"), do: "text-success"
   defp label_class("Negative"), do: "text-error"
   defp label_class(_), do: "text-base-content"
+
+  defp tab_label("positive"), do: "Positive"
+  defp tab_label("negative"), do: "Negative"
+  defp tab_label(_), do: "Neutral"
 end

@@ -1,5 +1,42 @@
 import Config
 
+# Load .env for local development if present.
+# Shell-exported values still win because we do not override existing env vars.
+env_path = Path.expand("../.env", __DIR__)
+
+if File.exists?(env_path) do
+  env_path
+  |> File.stream!()
+  |> Stream.map(&String.trim/1)
+  |> Stream.reject(&(&1 == "" or String.starts_with?(&1, "#")))
+  |> Enum.each(fn line ->
+    line =
+      if String.starts_with?(line, "export "),
+        do: String.replace_prefix(line, "export ", ""),
+        else: line
+
+    case String.split(line, "=", parts: 2) do
+      [key, value] ->
+        key = String.trim(key)
+
+        value =
+          value
+          |> String.trim()
+          |> String.trim_leading("\"")
+          |> String.trim_trailing("\"")
+          |> String.trim_leading("'")
+          |> String.trim_trailing("'")
+
+        if key != "" and System.get_env(key) in [nil, ""] do
+          System.put_env(key, value)
+        end
+
+      _ ->
+        :ok
+    end
+  end)
+end
+
 # API keys — set these in your shell or a .envrc file:
 #   export GROQ_API_KEY=gsk_...
 #   export NEWS_API_KEY=...

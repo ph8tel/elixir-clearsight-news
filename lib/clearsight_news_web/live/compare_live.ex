@@ -66,13 +66,13 @@ defmodule ClearsightNewsWeb.CompareLive do
   def render(assigns) do
     ~H"""
     <div class="max-w-7xl mx-auto px-4 py-8">
-      <div class="flex items-center gap-4 mb-8">
-        <.link navigate={~p"/"} class="btn btn-ghost btn-sm">← New Search</.link>
+      <div class="mb-8 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <h1 class="text-2xl font-bold">Article Comparison</h1>
+        <.link navigate={~p"/"} class="btn btn-ghost btn-sm w-full md:w-auto">← New Search</.link>
       </div>
 
       <%!-- Side-by-side rhetoric --%>
-      <div class="grid grid-cols-2 gap-6 mb-10">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
         <.rhetoric_panel label="Primary" article={@primary} result={@primary_rhetoric} />
         <.rhetoric_panel label="Reference" article={@reference} result={@reference_rhetoric} />
       </div>
@@ -146,16 +146,16 @@ defmodule ClearsightNewsWeb.CompareLive do
   defp rhetoric_body(assigns) do
     ~H"""
     <div class="space-y-3 text-sm">
-      <div>
+      <div class="flex flex-wrap items-center gap-2">
         <span class="font-semibold">Tone: </span>{@result.overall_tone}
-        <span class={"ml-2 badge badge-sm #{sentiment_badge(@result.sentiment_label)}"}>
+        <span class={"badge badge-sm #{sentiment_badge(@result.sentiment_label)}"}>
           {String.capitalize(@result.sentiment_label || "")}
         </span>
       </div>
 
       <div :if={@result.rhetorical_devices != []}>
         <p class="font-semibold mb-1">Rhetorical Devices</p>
-        <ul class="list-disc list-inside space-y-1 text-xs text-base-content/80">
+        <ul class="list-disc list-inside space-y-1 text-xs text-base-content/80 break-words">
           <li :for={d <- @result.rhetorical_devices}>
             <span class="font-medium">{d.device}</span>
             <span :if={d.example} class="italic"> — "{d.example}"</span>
@@ -165,7 +165,7 @@ defmodule ClearsightNewsWeb.CompareLive do
 
       <div :if={@result.bias_indicators != []}>
         <p class="font-semibold mb-1">Bias Indicators</p>
-        <ul class="list-disc list-inside space-y-1 text-xs text-base-content/80">
+        <ul class="list-disc list-inside space-y-1 text-xs text-base-content/80 break-words">
           <li :for={b <- @result.bias_indicators}>{b}</li>
         </ul>
       </div>
