@@ -4,7 +4,7 @@ ClearSight News is a Phoenix LiveView app for comparing how news outlets frame t
 
 ## Live demo
 
-https://clearsight-news.fly.dev/
+https://clearsightnews.org
 
 ## How it works
 
@@ -82,6 +82,7 @@ mix phx.server
 ```
 
 Open http://localhost:4000.
+
 
 ## Tests
 
