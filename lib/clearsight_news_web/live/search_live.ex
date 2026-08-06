@@ -118,8 +118,9 @@ defmodule ClearsightNewsWeb.SearchLive do
         <%!-- Search bar --%>
         <div class="flex flex-col items-center mb-14">
           <h1 class="text-4xl font-bold text-center mb-2">ClearSight News</h1>
+          <h2 class="text-2xl font-bold text-center mb-2">AI News Analysis</h2>
           <p class="text-center text-base-content/60 mb-10">
-            Search any topic. See how articles compare by sentiment.
+            Search for news articles by topic, then pick any two to compare how their tone and rhetoric differ.
           </p>
           <.form for={%{}} as={:search} phx-submit="search" class="flex gap-2 w-full max-w-2xl">
             <input
