@@ -19,8 +19,15 @@ defmodule ClearsightNews.Analysis do
   - GROQ_COMPARISON_MODEL (default: llama-3.3-70b-versatile)
   """
 
-  alias ClearsightNews.Analysis.{SentimentResult, RhetoricResult, ComparisonResult,
-                                   Emotions, Rhetoric, Certainty}
+  alias ClearsightNews.Analysis.{
+    SentimentResult,
+    RhetoricResult,
+    ComparisonResult,
+    Emotions,
+    Rhetoric,
+    Certainty
+  }
+
   alias Instructor.Adapters.Groq
 
   require Logger
@@ -86,7 +93,8 @@ defmodule ClearsightNews.Analysis do
         %{role: "system", content: @sentiment_system_prompt},
         %{
           role: "user",
-          content: "Analyse the sentiment of the following article.\n\nArticle:\n#{truncate(text)}"
+          content:
+            "Analyse the sentiment of the following article.\n\nArticle:\n#{truncate(text)}"
         }
       ],
       temperature: 0,
@@ -291,15 +299,20 @@ defmodule ClearsightNews.Analysis do
   end
 
   defp do_sentiment_request(api_key, body, opts, attempts_remaining, _last_error) do
-    case Req.post("https://api.groq.com/openai/v1/chat/completions",
+    case Req.post(
+           "https://api.groq.com/openai/v1/chat/completions",
            [auth: {:bearer, api_key}, json: body] ++ opts
          ) do
       {:ok, %{status: 200} = response} ->
-        content = get_in(response.body, ["choices", Access.at(0), "message", "content"])
+        message = get_in(response.body, ["choices", Access.at(0), "message"])
+        content = extract_sentiment_content(message)
 
         case cast_sentiment_result(content) do
-          {:ok, _} = ok -> ok
-          {:error, reason} -> do_sentiment_request(api_key, body, opts, attempts_remaining - 1, reason)
+          {:ok, _} = ok ->
+            ok
+
+          {:error, reason} ->
+            do_sentiment_request(api_key, body, opts, attempts_remaining - 1, reason)
         end
 
       {:ok, %{status: status}} ->
@@ -309,6 +322,16 @@ defmodule ClearsightNews.Analysis do
         {:error, reason}
     end
   end
+
+  # Prefer direct chat completion content, but accept tool-call arguments as a
+  # fallback so tests and edge model responses remain compatible.
+  defp extract_sentiment_content(%{"content" => content}) when is_binary(content), do: content
+
+  defp extract_sentiment_content(message) when is_map(message) do
+    get_in(message, ["tool_calls", Access.at(0), "function", "arguments"])
+  end
+
+  defp extract_sentiment_content(_), do: nil
 
   defp cast_sentiment_result(nil), do: {:error, "empty response from model"}
 

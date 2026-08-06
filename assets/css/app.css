@@ -100,6 +100,44 @@
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 /* Make LiveView wrapper divs transparent for layout */
-[data-phx-session], [data-phx-teleported-src] { display: contents }
+[data-phx-session],
+[data-phx-teleported-src] {
+  display: contents
+}
+
+/* Results page: mobile sentiment rail and spacing polish */
+@media (max-width: 767px) {
+  #results-mobile-tabs {
+    position: sticky;
+    top: 0.75rem;
+    z-index: 20;
+    padding: 0.3rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    border: 1px solid var(--color-base-300);
+    border-radius: var(--radius-box);
+    background: color-mix(in oklab, var(--color-base-100) 90%, transparent);
+    backdrop-filter: blur(6px);
+  }
+
+  #results-mobile-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  #results-mobile-tabs .tab {
+    min-height: 2.5rem;
+    white-space: nowrap;
+    font-size: 0.875rem;
+  }
+
+  #results-mobile-tabs .badge {
+    font-variant-numeric: tabular-nums;
+  }
+
+  #mobile-active-column {
+    padding-top: 0.25rem;
+  }
+}
 
 /* This file is for your main application CSS */
